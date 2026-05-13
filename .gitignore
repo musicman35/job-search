@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+build/
+dist/
+*.egg-info/
+
+# Secrets
+.env
+.env.*
+!.env.example
+!.env.sample
+!.env.template
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs / local artifacts
+*.log
+.pytest_cache/
+
+# Claude Code per-developer settings (team-shared settings.json stays tracked)
+.claude/settings.local.json

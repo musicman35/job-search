@@ -1,0 +1,63 @@
+name: Daily job tracker
+
+on:
+  schedule:
+    # 13:00 UTC daily = 8 AM ET (EST) / 9 AM ET (EDT during DST).
+    - cron: '0 13 * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60  # batch LLM job can take a while
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.13
+
+      - name: Install dependencies
+        run: |
+          uv venv
+          uv pip install -r requirements.txt
+
+      - name: Run tracker
+        id: tracker
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+        run: uv run python run.py
+
+      - name: Commit CSV changes
+        if: success()
+        env:
+          NEW_COUNT: ${{ steps.tracker.outputs.new_count }}
+          CLOSED_COUNT: ${{ steps.tracker.outputs.closed_count }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/jobs.csv
+          if git diff --cached --quiet; then
+            echo "No CSV changes to commit."
+            exit 0
+          fi
+          today=$(date -u +'%Y-%m-%d')
+          new=${NEW_COUNT:-0}
+          closed=${CLOSED_COUNT:-0}
+          git commit -m "daily run: ${today} (${new} new, ${closed} closed)"
+          git push
