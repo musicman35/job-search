@@ -229,6 +229,57 @@ def test_build_new_row_falls_back_to_fetcher_when_llm_missing():
     assert row["track"] == ""
 
 
+def test_successful_companies_protects_unfetched_rows():
+    """Rows from companies whose fetchers all failed are NOT auto-closed.
+
+    Regression: previously a partial run (e.g., --companies Truist) would
+    close every non-Truist row. Same bug fires if any fetcher errors in CI.
+    """
+    existing = [
+        _row("truist-old", status="open"),
+        _row("aig-untouched", status="open"),
+        _row("aig-untouched2", status="new", first_seen=YESTERDAY),
+        _row("aig-applied", status="applied", notes="phone screen"),
+    ]
+    # Mutate company on rows so the diff can route by company name.
+    existing[0]["company"] = "Truist"
+    for r in existing[1:]:
+        r["company"] = "AIG"
+    fetched = [{**_posting("truist-old"), "company": "Truist"}]
+    successful = {"Truist"}  # AIG's fetcher failed
+    upd, _, closed = diff_postings(existing, fetched, TODAY, successful_companies=successful)
+
+    by_id = {r["job_id"]: r for r in upd}
+    # Truist row was checked and is still in fetch -> last_seen bumped
+    assert by_id["truist-old"]["last_seen"] == TODAY
+    assert by_id["truist-old"]["status"] == "open"
+    # AIG rows: untouched (no last_seen bump, no closing, no auto-promotion)
+    assert by_id["aig-untouched"]["status"] == "open"
+    assert by_id["aig-untouched"]["last_seen"] == YESTERDAY
+    assert by_id["aig-untouched2"]["status"] == "new", "must NOT promote when company wasn't fetched"
+    assert by_id["aig-untouched2"]["last_seen"] == YESTERDAY
+    assert by_id["aig-applied"]["status"] == "applied"
+    assert by_id["aig-applied"]["notes"] == "phone screen"
+    assert closed == [], "no rows should be closed when only Truist was fetched"
+
+
+def test_successful_companies_none_keeps_old_behavior():
+    """Passing None (default) closes everything missing — backwards-compat."""
+    upd, _, closed = diff_postings([_row("a", status="open")], [], TODAY, successful_companies=None)
+    assert upd[0]["status"] == "closed"
+    assert [c["job_id"] for c in closed] == ["a"]
+
+
+def test_build_new_row_carries_fit_reasoning():
+    """fit_reasoning is needed by the email but must not leak into the CSV."""
+    row = build_new_row(
+        _posting("a"),
+        {"fit_score": 8, "fit_reasoning": "Strong RAG and Python alignment.", "category": "ic"},
+        TODAY,
+    )
+    assert row["fit_reasoning"] == "Strong RAG and Python alignment."
+
+
 def test_csv_roundtrip_preserves_commas_and_quotes():
     with tempfile.TemporaryDirectory() as d:
         path = os.path.join(d, "jobs.csv")
@@ -273,6 +324,9 @@ if __name__ == "__main__":
         ("mixed_scenario", test_mixed_scenario),
         ("build_new_row_uses_llm_authoritative_fields", test_build_new_row_uses_llm_authoritative_fields),
         ("build_new_row_falls_back_to_fetcher_when_llm_missing", test_build_new_row_falls_back_to_fetcher_when_llm_missing),
+        ("successful_companies_protects_unfetched_rows", test_successful_companies_protects_unfetched_rows),
+        ("successful_companies_none_keeps_old_behavior", test_successful_companies_none_keeps_old_behavior),
+        ("build_new_row_carries_fit_reasoning", test_build_new_row_carries_fit_reasoning),
         ("csv_roundtrip_preserves_commas_and_quotes", test_csv_roundtrip_preserves_commas_and_quotes),
         ("load_missing_file_returns_empty", test_load_missing_file_returns_empty),
         ("save_creates_parent_dir", test_save_creates_parent_dir),

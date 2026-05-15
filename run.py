@@ -44,11 +44,20 @@ def _label(company: dict, source: dict) -> str:
     return f"{company['name']} ({source['type']}:{leaf})"
 
 
-def fetch_all(companies: list[dict]) -> tuple[list[dict], list[str], list[tuple[str, str]]]:
-    """Run every fetcher. Returns (postings, succeeded_labels, failed_pairs)."""
+def fetch_all(
+    companies: list[dict],
+) -> tuple[list[dict], list[str], list[tuple[str, str]], set[str]]:
+    """Run every fetcher.
+
+    Returns (postings, succeeded_labels, failed_pairs, successful_companies):
+      successful_companies — set of company names where at least one source
+      succeeded. Used by diff_postings to avoid auto-closing rows for a
+      company whose only fetcher failed this run.
+    """
     postings: list[dict] = []
     succeeded: list[str] = []
     failed: list[tuple[str, str]] = []
+    successful_companies: set[str] = set()
     for company in companies:
         for source in company["sources"]:
             label = _label(company, source)
@@ -61,11 +70,12 @@ def fetch_all(companies: list[dict]) -> tuple[list[dict], list[str], list[tuple[
                 hits = fetcher.fetch(company, source)
                 postings.extend(hits)
                 succeeded.append(label)
+                successful_companies.add(company["name"])
                 print(f"[ok]   {label}: {len(hits)} matched", flush=True)
             except Exception as e:
                 failed.append((label, f"{type(e).__name__}: {e}"))
                 print(f"[fail] {label}: {type(e).__name__}: {e}", flush=True)
-    return postings, succeeded, failed
+    return postings, succeeded, failed, successful_companies
 
 
 def _source_for(posting: dict, companies: list[dict]) -> dict | None:
@@ -195,7 +205,7 @@ def main() -> int:
     today = _today()
     print(f"=== job-tracker run {today} ===", flush=True)
 
-    fetched, succeeded, failed = fetch_all(companies)
+    fetched, succeeded, failed, successful_companies = fetch_all(companies)
 
     if not succeeded:
         print("ERROR: every fetcher failed; aborting.", flush=True)
@@ -209,7 +219,9 @@ def main() -> int:
     )
 
     existing = load_csv(config.CSV_PATH)
-    updated_existing, new_to_enrich, freshly_closed = diff_postings(existing, fetched, today)
+    updated_existing, new_to_enrich, freshly_closed = diff_postings(
+        existing, fetched, today, successful_companies=successful_companies
+    )
     print(
         f"diff: {len(new_to_enrich)} new, {len(freshly_closed)} freshly closed, "
         f"{len(updated_existing)} carried over",

@@ -31,6 +31,7 @@ def diff_postings(
     existing: list[dict],
     fetched: list[dict],
     today: str,
+    successful_companies: set[str] | None = None,
 ) -> tuple[list[dict], list[dict], list[dict]]:
     """Diff fetched postings against CSV state.
 
@@ -47,6 +48,12 @@ def diff_postings(
         Orchestrator passes these to the LLM, then to `build_new_row`.
       freshly_closed — subset of updated_existing whose status flipped this
         run (for the email summary). Does not include already-closed rows.
+
+    `successful_companies` — if provided, rows whose `company` field is NOT
+    in this set are left untouched (no `last_seen` bump, no closing). This
+    prevents a fetcher failure (or a partial `--companies` run) from
+    incorrectly marking healthy postings as closed just because we didn't
+    check on them this run. Pass None to diff against the full universe.
     """
     fetched_by_id = {p["job_id"]: p for p in fetched}
     existing_ids = {r["job_id"] for r in existing}
@@ -55,6 +62,11 @@ def diff_postings(
     freshly_closed: list[dict] = []
     for src_row in existing:
         row = dict(src_row)  # never mutate caller's data
+        if successful_companies is not None and row.get("company") not in successful_companies:
+            # This company's sources weren't successfully fetched this run.
+            # We have no evidence about whether its postings still exist.
+            updated_existing.append(row)
+            continue
         if row["job_id"] in fetched_by_id:
             row["last_seen"] = today
             if row.get("status") == "new" and row.get("first_seen") != today:
@@ -74,6 +86,9 @@ def build_new_row(posting: dict, llm_fields: dict, today: str) -> dict:
     The LLM is authoritative for category/location (it has the full description);
     fetcher values are fallbacks. `key_reqs` arrives as a joined string from the
     LLM step (newline- or semicolon-separated, whatever llm.py produces).
+
+    `fit_reasoning` is carried on the row dict so the email step can render
+    it, but `save_csv` filters to CSV_COLUMNS so it is NOT persisted.
     """
     return {
         "job_id": posting["job_id"],
@@ -92,4 +107,5 @@ def build_new_row(posting: dict, llm_fields: dict, today: str) -> dict:
         "fit_score": llm_fields.get("fit_score", ""),
         "key_reqs": llm_fields.get("key_reqs", ""),
         "notes": "",
+        "fit_reasoning": llm_fields.get("fit_reasoning", ""),  # ephemeral
     }
